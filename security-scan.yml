@@ -1,0 +1,255 @@
+# .github/workflows/security-scan.yml
+# Place this in: FideleDonadje/shared-workflows/.github/workflows/security-scan.yml
+#
+# SHA PINNING REQUIRED BEFORE USE:
+# Every action reference marked <PIN: tag> must be replaced with its commit SHA.
+# Get the SHA from: https://github.com/<owner>/<repo>/tags → click the tag → copy the full commit SHA.
+# Example: actions/checkout@v4 → actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+#
+# Actions to pin:
+#   actions/checkout@v4
+#   actions/setup-node@v4
+#   actions/setup-python@v4
+#   aws-actions/configure-aws-credentials@v4
+#   github/codeql-action/upload-sarif@v3
+
+name: Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      iac_type:
+        description: "IaC framework in the calling repo: terraform or cdk"
+        required: false
+        default: "terraform"
+        type: string
+    secrets:
+      CDK_SYNTH_ROLE_ARN:
+        description: "IAM role ARN for cdk synth (required when iac_type is cdk)"
+        required: false
+
+# Minimum permissions. security-events: write is required for SARIF upload to
+# GitHub code scanning. contents: read is required for checkout.
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+
+  # ── Job 1: Secret Detection ──────────────────────────────────────────────────
+  # Gitleaks scans the full git history for secrets. fetch-depth: 0 is required.
+  # Runs first because it is the fastest and has zero dependencies.
+  gitleaks:
+    name: Secret Detection (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.21.2"
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run Gitleaks
+        # --no-git disables git-specific checks we already handle via fetch-depth.
+        # Exit code 1 means leaks found — that is a pipeline failure by design.
+        run: gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif
+        continue-on-error: false
+
+      - name: Upload SARIF to GitHub Code Scanning
+        # always() ensures the upload runs even when the scan step fails,
+        # so findings appear as PR annotations rather than just a failed step.
+        if: always()
+        uses: github/codeql-action/upload-sarif@7434149006143a4d75b82a2f411ef15b03ccc2d7
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  # ── Job 2: IaC Scanning ──────────────────────────────────────────────────────
+  # Checkov scans infrastructure-as-code for misconfigurations.
+  # For Terraform repos: scans .tf files directly.
+  # For CDK repos: runs cdk synth first to produce CloudFormation in cdk.out/,
+  # then scans that output. This requires AWS OIDC credentials.
+  checkov:
+    name: IaC Scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # CDK synth block — skipped entirely for Terraform repos.
+      - name: Setup Node.js
+        if: inputs.iac_type == 'cdk'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install CDK dependencies
+        if: inputs.iac_type == 'cdk'
+        run: npm ci
+
+      - name: Install AWS CDK CLI
+        if: inputs.iac_type == 'cdk'
+        run: npm install -g aws-cdk
+
+      - name: Configure AWS credentials via OIDC
+        if: inputs.iac_type == 'cdk'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          # This role needs only the permissions required to resolve CDK context
+          # lookups (ec2:DescribeAvailabilityZones, ssm:GetParameter, etc.).
+          # Scope it tightly — this role must not have deploy permissions.
+          role-to-assume: ${{ secrets.CDK_SYNTH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Synth CDK app
+        if: inputs.iac_type == 'cdk'
+        run: cdk synth
+
+      # Checkov install — shared for both branches.
+      - name: Setup Python for Checkov
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      # Terraform scan — runs when iac_type is terraform (or unset).
+      - name: Run Checkov on Terraform
+        if: inputs.iac_type == 'terraform'
+        run: |
+          checkov -d . \
+            --framework terraform \
+            --output sarif \
+            --output-file-path . \
+            --quiet
+          # Checkov writes results_sarif.sarif in the output path directory.
+          mv results_sarif.sarif checkov.sarif
+
+      # CDK scan — runs on the CloudFormation output from cdk synth.
+      - name: Run Checkov on CDK synth output
+        if: inputs.iac_type == 'cdk'
+        run: |
+          checkov -d cdk.out \
+            --framework cloudformation \
+            --output sarif \
+            --output-file-path . \
+            --quiet
+          mv results_sarif.sarif checkov.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+  # ── Job 3: SAST ──────────────────────────────────────────────────────────────
+  # Semgrep scans Lambda source code (TypeScript and Python) for vulnerabilities.
+  # Uses the OSS CLI installed via pip — no Semgrep account or token required.
+  # --config auto pulls the community ruleset appropriate for detected languages.
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep
+        # --error causes a non-zero exit on findings, blocking the PR.
+        # Remove --error if you want Semgrep to annotate without blocking.
+        run: |
+          semgrep scan \
+            --config auto \
+            --sarif \
+            --output semgrep.sarif \
+            --error
+        continue-on-error: false
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ── Job 4: SCA — Node.js ─────────────────────────────────────────────────────
+  # npm audit scans all Node.js dependency trees for known vulnerabilities.
+  # Discovers every package.json in the repo (excluding node_modules) and
+  # audits each one independently.
+  npm-audit:
+    name: "SCA \u2014 Node.js (npm audit)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+
+      - name: Audit all Node.js dependency trees
+        # --audit-level=high means critical and high severity fail the job.
+        # Adjust to 'critical' if you want to allow high findings through.
+        run: |
+          find . -name "package.json" \
+            -not -path "*/node_modules/*" \
+            -not -name "package-lock.json" | while read pkg; do
+              dir=$(dirname "$pkg")
+              echo "──────────────────────────────────────"
+              echo "Auditing: $dir"
+              echo "──────────────────────────────────────"
+              (cd "$dir" && npm install --package-lock-only --ignore-scripts 2>/dev/null || true)
+              (cd "$dir" && npm audit --audit-level=high)
+            done
+
+  # ── Job 5: SCA — Python ──────────────────────────────────────────────────────
+  # pip-audit scans Python dependency manifests for known vulnerabilities.
+  # Discovers every requirements*.txt in the repo (excluding node_modules)
+  # and audits each one independently.
+  pip-audit:
+    name: "SCA \u2014 Python (pip-audit)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit all Python dependency manifests
+        run: |
+          FOUND=0
+          find . -name "requirements*.txt" \
+            -not -path "*/node_modules/*" | while read req; do
+              echo "──────────────────────────────────────"
+              echo "Auditing: $req"
+              echo "──────────────────────────────────────"
+              FOUND=1
+              pip-audit -r "$req"
+            done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No requirements*.txt files found. Skipping pip-audit."
+          fi
