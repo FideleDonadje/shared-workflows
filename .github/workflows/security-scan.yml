@@ -51,7 +51,7 @@ jobs:
 
   # ── Job 2: IaC Scanning ──────────────────────────────────────────────────────
   # For CDK repos: package.json lives inside cdk/ subdirectory.
-  # npm ci, cdk synth, and checkov scan all operate relative to cdk/.
+  # Lambda deps are installed before synth so esbuild can bundle successfully.
   checkov:
     name: IaC Scan (Checkov)
     runs-on: ubuntu-latest
@@ -74,6 +74,16 @@ jobs:
       - name: Install AWS CDK CLI
         if: inputs.iac_type == 'cdk'
         run: npm install -g aws-cdk
+
+      - name: Install Lambda dependencies
+        if: inputs.iac_type == 'cdk'
+        run: |
+          find lambda -name "package.json" \
+            -not -path "*/node_modules/*" | while read pkg; do
+              dir=$(dirname "$pkg")
+              echo "Installing deps in $dir"
+              (cd "$dir" && npm install)
+            done
 
       - name: Configure AWS credentials via OIDC
         if: inputs.iac_type == 'cdk'
@@ -155,7 +165,7 @@ jobs:
 
   # ── Job 4: SCA — Node.js ─────────────────────────────────────────────────────
   npm-audit:
-    name: "SCA \u2014 Node.js (npm audit)"
+    name: "SCA — Node.js (npm audit)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -181,7 +191,7 @@ jobs:
 
   # ── Job 5: SCA — Python ──────────────────────────────────────────────────────
   pip-audit:
-    name: "SCA \u2014 Python (pip-audit)"
+    name: "SCA — Python (pip-audit)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
