@@ -52,6 +52,7 @@ jobs:
   # ── Job 2: IaC Scanning ──────────────────────────────────────────────────────
   # For CDK repos: package.json lives inside cdk/ subdirectory.
   # Lambda deps are installed before synth so esbuild can bundle successfully.
+  # set +e captures Checkov exit code so SARIF upload always runs even on findings.
   checkov:
     name: IaC Scan (Checkov)
     runs-on: ubuntu-latest
@@ -107,22 +108,28 @@ jobs:
       - name: Run Checkov on Terraform
         if: inputs.iac_type == 'terraform'
         run: |
+          set +e
           checkov -d . \
             --framework terraform \
             --output sarif \
             --output-file-path . \
             --quiet
+          CHECKOV_EXIT=$?
           mv results_sarif.sarif checkov.sarif
+          exit $CHECKOV_EXIT
 
       - name: Run Checkov on CDK synth output
         if: inputs.iac_type == 'cdk'
         run: |
+          set +e
           checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output sarif \
             --output-file-path . \
             --quiet
+          CHECKOV_EXIT=$?
           mv results_sarif.sarif checkov.sarif
+          exit $CHECKOV_EXIT
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
