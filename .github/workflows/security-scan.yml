@@ -66,7 +66,7 @@ jobs:
         # always() ensures the upload runs even when the scan step fails,
         # so findings appear as PR annotations rather than just a failed step.
         if: always()
-        uses: github/codeql-action/upload-sarif@7434149006143a4d75b82a2f411ef15b03ccc2d7
+        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -89,7 +89,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Install CDK dependencies
         if: inputs.iac_type == 'cdk'
@@ -147,7 +146,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
+        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
         with:
           sarif_file: checkov.sarif
           category: checkov
@@ -184,7 +183,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
+        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
         with:
           sarif_file: semgrep.sarif
           category: semgrep
