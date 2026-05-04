@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4 # <PIN: v4>
         with:
           fetch-depth: 0
 
@@ -66,7 +66,7 @@ jobs:
         # always() ensures the upload runs even when the scan step fails,
         # so findings appear as PR annotations rather than just a failed step.
         if: always()
-        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
+        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -81,18 +81,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4 # <PIN: v4>
 
       # CDK synth block — skipped entirely for Terraform repos.
       - name: Setup Node.js
         if: inputs.iac_type == 'cdk'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@v4 # <PIN: v4>
         with:
           node-version: "20"
+          cache: "npm"
 
       - name: Install CDK dependencies
         if: inputs.iac_type == 'cdk'
-        run: npm ci
+        run: cd cdk && npm ci
 
       - name: Install AWS CDK CLI
         if: inputs.iac_type == 'cdk'
@@ -102,19 +103,16 @@ jobs:
         if: inputs.iac_type == 'cdk'
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
         with:
-          # This role needs only the permissions required to resolve CDK context
-          # lookups (ec2:DescribeAvailabilityZones, ssm:GetParameter, etc.).
-          # Scope it tightly — this role must not have deploy permissions.
           role-to-assume: ${{ secrets.CDK_SYNTH_ROLE_ARN }}
           aws-region: us-east-1
 
       - name: Synth CDK app
         if: inputs.iac_type == 'cdk'
-        run: cdk synth
+        run: cd cdk && cdk synth
 
       # Checkov install — shared for both branches.
       - name: Setup Python for Checkov
-        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        uses: actions/setup-python@v4 # <PIN: v4>
         with:
           python-version: "3.12"
 
@@ -137,7 +135,7 @@ jobs:
       - name: Run Checkov on CDK synth output
         if: inputs.iac_type == 'cdk'
         run: |
-          checkov -d cdk.out \
+          checkov -d cdk/cdk.out \
             --framework cloudformation \
             --output sarif \
             --output-file-path . \
@@ -146,7 +144,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
+        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
         with:
           sarif_file: checkov.sarif
           category: checkov
@@ -160,10 +158,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4 # <PIN: v4>
 
       - name: Setup Python
-        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        uses: actions/setup-python@v4 # <PIN: v4>
         with:
           python-version: "3.12"
 
@@ -183,7 +181,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@a723e99345b89ee0bbcbd68ee4e63f9a56b42a25
+        uses: github/codeql-action/upload-sarif@v3 # <PIN: v3>
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -197,10 +195,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4 # <PIN: v4>
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@v4 # <PIN: v4>
         with:
           node-version: "20"
 
@@ -228,10 +226,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@v4 # <PIN: v4>
 
       - name: Setup Python
-        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        uses: actions/setup-python@v4 # <PIN: v4>
         with:
           python-version: "3.12"
 
